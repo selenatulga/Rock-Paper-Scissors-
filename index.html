@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+<title>Rock Paper Scissors — Live Camera Duel</title>
+
+<!-- Display + utility typefaces -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+
+<!-- TensorFlow.js and Teachable Machine image library -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8/dist/teachablemachine-image.min.js"></script>
+
+<style>
+/* =========================================================
+   DESIGN TOKENS
+   Arcade-duel theme: deep indigo/charcoal arena, electric
+   violet for the player, hot coral for the bot, warm gold
+   as the "win" signal color.
+   ========================================================= */
+:root {
+  --bg-0: #0b0c14;
+  --panel: #171826;
+  --panel-edge: #262845;
+  --player: #7c5cff;
+  --player-soft: #7c5cff33;
+  --bot: #ff5c7c;
+  --bot-soft: #ff5c7c33;
+  --gold: #ffc857;
+  --text-hi: #f4f3fb;
+  --text-mid: #a8a6c2;
+  --text-dim: #6e6c8a;
+  --win: #4be3a0;
+  --lose: #ff5c7c;
+  --tie: #ffc857;
+
+  --font-display: "Bebas Neue", "Arial Narrow", sans-serif;
+  --font-body: "Space Grotesk", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+
+  --radius-lg: 28px;
+  --radius-md: 18px;
+
+  --shadow-deep: 0 30px 60px -20px #00000090, 0 0 0 1px #ffffff0a inset;
+  --shadow-soft: 0 12px 30px -12px #00000080;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background:
+    radial-gradient(circle at 15% -10%, #2c1f5e55, transparent 55%),
+    radial-gradient(circle at 90% 110%, #5e1f3e55, transparent 50%),
+    linear-gradient(180deg, var(--bg-0), #101120 60%, var(--bg-0));
+  color: var(--text-hi);
+  font-family: var(--font-body);
+  overflow-x: hidden;
+}
+
+h1, h2 { margin: 0; }
+
+/* =========================================================
+   LAYOUT SHELL
+   ========================================================= */
+.arena {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 20px 20px 48px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* ---------------- Status bar ---------------- */
+.statusbar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 22px;
+  background: linear-gradient(180deg, var(--panel), #12131f);
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+}
+
+.fighter {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fighter--bot { align-items: flex-end; }
+
+.fighter__label {
+  font-family: var(--font-display);
+  letter-spacing: 0.08em;
+  font-size: 1.3rem;
+  color: var(--text-mid);
+}
+.fighter--player .fighter__label { color: var(--player); }
+.fighter--bot .fighter__label { color: var(--bot); }
+
+.lives { display: flex; gap: 6px; }
+.fighter--bot .lives { flex-direction: row-reverse; }
+
+.lives__heart {
+  width: 22px;
+  height: 22px;
+  transition: transform 0.35s ease, opacity 0.35s ease;
+}
+.lives__heart svg { width: 100%; height: 100%; display: block; }
+.lives__heart.lost {
+  opacity: 0.25;
+  transform: scale(0.75) rotate(-8deg);
+}
+
+.score-plate {
+  text-align: center;
+  padding: 6px 22px;
+  border-left: 1px solid var(--panel-edge);
+  border-right: 1px solid var(--panel-edge);
+}
+.score-plate__eyebrow {
+  display: block;
+  font-size: 0.68rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 2px;
+}
+.score-plate__value {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 1.6rem;
+}
+.score-plate__dash { color: var(--text-dim); margin: 0 6px; }
+
+/* ---------------- Main stage grid ---------------- */
+.stage {
+  display: grid;
+  grid-template-columns: 1fr 1.15fr 1fr;
+  gap: 20px;
+  align-items: stretch;
+}
+
+.cam-card, .bot-card, .center-column {
+  background: linear-gradient(180deg, var(--panel), #12131f);
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-deep);
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.cam-card__title {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  letter-spacing: 0.05em;
+  color: var(--player);
+}
+.bot-card .cam-card__title,
+.bot-card h2 { color: var(--bot); }
+
+/* ---------------- Webcam frame ---------------- */
+.cam-frame {
+  position: relative;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  aspect-ratio: 4 / 3;
+  background: #0a0a12;
+  border: 1px solid var(--panel-edge);
+  box-shadow: 0 0 0 3px var(--player-soft);
+}
+
+.cam-frame__video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cam-frame__video canvas,
+.cam-frame__video video {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover;
+}
+
+.cam-frame__scan {
+  position: absolute;
+  left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--player), transparent);
+  top: 0;
+  animation: scanline 2.6s linear infinite;
+  opacity: 0.85;
+  pointer-events: none;
+}
+@keyframes scanline {
+  0% { top: 0%; }
+  50% { top: 98%; }
+  100% { top: 0%; }
+}
+
+.cam-frame__overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 20px;
+  background: #05050ccc;
+  font-size: 0.95rem;
+  color: var(--text-mid);
+  transition: opacity 0.3s ease;
+}
+.cam-frame__overlay.hidden { opacity: 0; pointer-events: none; }
+
+/* ---------------- Confidence bars ---------------- */
+.confidence { display: flex; flex-direction: column; gap: 10px; }
+.confidence__row {
+  display: grid;
+  grid-template-columns: 26px 64px 1fr 46px;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.85rem;
+}
+.confidence__icon { font-size: 1.1rem; text-align: center; }
+.confidence__name { color: var(--text-mid); }
+.confidence__track {
+  height: 10px;
+  border-radius: 6px;
+  background: #0d0e18;
+  border: 1px solid var(--panel-edge);
+  overflow: hidden;
+}
+.confidence__fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--player), #b39bff);
+  transition: width 0.12s linear;
+}
+.confidence__pct {
+  font-family: var(--font-mono);
+  text-align: right;
+  color: var(--text-mid);
+}
+.confidence__row.leading .confidence__name,
+.confidence__row.leading .confidence__pct { color: var(--text-hi); font-weight: 600; }
+.confidence__row.leading .confidence__fill { background: linear-gradient(90deg, var(--player), var(--gold)); }
+
+/* ---------------- Center column ---------------- */
+.center-column {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 22px;
+  position: relative;
+  min-height: 420px;
+}
+
+/* Countdown ring */
+.countdown {
+  width: 160px;
+  height: 160px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle, #1c1d30, #101120);
+  border: 3px solid var(--player);
+  box-shadow: 0 0 40px -8px var(--player);
+}
+.countdown__number {
+  font-family: var(--font-display);
+  font-size: 5rem;
+  line-height: 1;
+  color: var(--text-hi);
+  animation: pop 0.55s cubic-bezier(.2,1.6,.4,1);
+}
+@keyframes pop {
+  0% { transform: scale(0.3); opacity: 0; }
+  60% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); }
+}
+.countdown__number.go {
+  color: var(--gold);
+  font-size: 3.4rem;
+}
+
+/* Face-off result card */
+.faceoff {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+  animation: fade-up 0.4s ease both;
+}
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.faceoff__side { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.faceoff__icon {
+  font-size: 4.2rem;
+  filter: drop-shadow(0 8px 18px #00000080);
+}
+.faceoff__name {
+  font-family: var(--font-display);
+  letter-spacing: 0.06em;
+  font-size: 1.3rem;
+  color: var(--text-mid);
+}
+.faceoff__vs {
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  color: var(--text-dim);
+}
+
+.result-banner {
+  font-family: var(--font-display);
+  font-size: 2.2rem;
+  letter-spacing: 0.04em;
+  padding: 6px 26px;
+  border-radius: 999px;
+  animation: fade-up 0.4s ease both;
+}
+.result-banner.win { color: var(--win); text-shadow: 0 0 24px #4be3a066; }
+.result-banner.lose { color: var(--lose); text-shadow: 0 0 24px #ff5c7c66; }
+.result-banner.tie { color: var(--tie); text-shadow: 0 0 24px #ffc85766; }
+
+/* Start round button */
+.start-btn {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  letter-spacing: 0.08em;
+  padding: 18px 46px;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  color: #0b0c14;
+  background: linear-gradient(135deg, var(--gold), #ff9f5c);
+  box-shadow: 0 14px 30px -10px #ffc85788;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.2s ease;
+}
+.start-btn:hover:not(:disabled) { transform: translateY(-3px); box-shadow: 0 18px 34px -8px #ffc857aa; }
+.start-btn:active:not(:disabled) { transform: translateY(0); }
+.start-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  box-shadow: none;
+  background: #35364a;
+  color: var(--text-mid);
+}
+.start-btn--light {
+  background: linear-gradient(135deg, var(--player), #b39bff);
+  box-shadow: 0 14px 30px -10px #7c5cff88;
+  color: #fff;
+}
+
+.hint {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  max-width: 280px;
+}
+.hint strong { color: var(--gold); }
+
+/* ---------------- Bot card ---------------- */
+.bot-card { align-items: center; text-align: center; }
+.bot-face {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--radius-md);
+  background: #0a0a12;
+  border: 1px solid var(--panel-edge);
+  box-shadow: 0 0 0 3px var(--bot-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 5rem;
+  transition: transform 0.15s ease;
+}
+.bot-card__caption { color: var(--text-mid); font-size: 0.9rem; min-height: 1.2em; }
+
+/* =========================================================
+   GAME OVER OVERLAY
+   ========================================================= */
+.gameover {
+  position: fixed;
+  inset: 0;
+  background: #05050fee;
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  animation: fade-up 0.35s ease both;
+}
+.gameover__card {
+  background: linear-gradient(180deg, var(--panel), #0f101c);
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius-lg);
+  padding: 56px 64px;
+  text-align: center;
+  box-shadow: var(--shadow-deep);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  max-width: 90vw;
+}
+.gameover__title {
+  font-family: var(--font-display);
+  font-size: 4rem;
+  letter-spacing: 0.05em;
+  background: linear-gradient(135deg, var(--gold), var(--bot));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.gameover__subtitle { color: var(--text-mid); }
+.gameover__score {
+  font-family: var(--font-mono);
+  font-size: 2rem;
+  margin-bottom: 12px;
+}
+
+/* =========================================================
+   RESPONSIVE
+   ========================================================= */
+@media (max-width: 980px) {
+  .stage { grid-template-columns: 1fr; }
+  .center-column { order: -1; min-height: 300px; }
+  .score-plate { border: none; }
+}
+
+@media (max-width: 560px) {
+  .statusbar { grid-template-columns: 1fr; text-align: center; gap: 10px; }
+  .fighter, .fighter--bot { align-items: center; }
+  .fighter--bot .lives { flex-direction: row; }
+  .score-plate { border-top: 1px solid var(--panel-edge); border-left: none; border-right: none; padding-top: 10px; }
+  .gameover__card { padding: 40px 26px; }
+  .gameover__title { font-size: 2.6rem; }
+  .start-btn { font-size: 1.2rem; padding: 16px 34px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="arena">
+
+  <!-- ============ TOP STATUS BAR: lives + score ============ -->
+  <header class="statusbar">
+    <div class="fighter fighter--player">
+      <span class="fighter__label">You</span>
+      <div class="lives" id="playerLives" aria-label="Player lives"></div>
+    </div>
+
+    <div class="score-plate">
+      <span class="score-plate__eyebrow">Score</span>
+      <div class="score-plate__value">
+        <span id="playerScore">0</span>
+        <span class="score-plate__dash">–</span>
+        <span id="botScore">0</span>
+      </div>
+    </div>
+
+    <div class="fighter fighter--bot">
+      <span class="fighter__label">Bot</span>
+      <div class="lives" id="botLives" aria-label="Bot lives"></div>
+    </div>
+  </header>
+
+  <!-- ============ MAIN STAGE ============ -->
+  <main class="stage">
+
+    <!-- Webcam + live prediction column -->
+    <section class="cam-card">
+      <h2 class="cam-card__title">Your Hand</h2>
+      <div class="cam-frame">
+        <div id="webcamContainer" class="cam-frame__video"></div>
+        <div class="cam-frame__scan"></div>
+        <div id="camOverlayMessage" class="cam-frame__overlay">
+          Requesting camera access…
+        </div>
+      </div>
+
+      <!-- Live confidence bars -->
+      <div class="confidence" id="confidenceBars">
+        <div class="confidence__row" data-class="Rock">
+          <span class="confidence__icon">✊</span>
+          <span class="confidence__name">Rock</span>
+          <div class="confidence__track"><div class="confidence__fill"></div></div>
+          <span class="confidence__pct">0%</span>
+        </div>
+        <div class="confidence__row" data-class="Paper">
+          <span class="confidence__icon">✋</span>
+          <span class="confidence__name">Paper</span>
+          <div class="confidence__track"><div class="confidence__fill"></div></div>
+          <span class="confidence__pct">0%</span>
+        </div>
+        <div class="confidence__row" data-class="Scissors">
+          <span class="confidence__icon">✌️</span>
+          <span class="confidence__name">Scissors</span>
+          <div class="confidence__track"><div class="confidence__fill"></div></div>
+          <span class="confidence__pct">0%</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Center column: countdown / VS / result -->
+    <section class="center-column">
+
+      <!-- Countdown ring, hidden until a round starts -->
+      <div class="countdown" id="countdown" hidden>
+        <div class="countdown__number" id="countdownNumber">3</div>
+      </div>
+
+      <!-- Face-off card: shown once a round resolves -->
+      <div class="faceoff" id="faceoff" hidden>
+        <div class="faceoff__side">
+          <div class="faceoff__icon" id="playerIcon">✊</div>
+          <div class="faceoff__name" id="playerMoveName">Rock</div>
+        </div>
+        <div class="faceoff__vs">VS</div>
+        <div class="faceoff__side">
+          <div class="faceoff__icon" id="botIcon">✊</div>
+          <div class="faceoff__name" id="botMoveName">Rock</div>
+        </div>
+      </div>
+
+      <div class="result-banner" id="resultBanner" hidden></div>
+
+      <button id="startBtn" class="start-btn" disabled>
+        <span class="start-btn__label">Loading model…</span>
+      </button>
+
+      <p class="hint">Show Rock, Paper, or Scissors before the countdown hits <strong>GO!</strong></p>
+    </section>
+
+    <!-- Bot column -->
+    <section class="bot-card">
+      <h2 class="cam-card__title">Bot</h2>
+      <div class="bot-face" id="botFace">
+        <span id="botFaceIcon">🤖</span>
+      </div>
+      <p class="bot-card__caption" id="botCaption">Waiting for round to start…</p>
+    </section>
+
+  </main>
+</div>
+
+<!-- ============ GAME OVER OVERLAY ============ -->
+<div class="gameover" id="gameOverOverlay" hidden>
+  <div class="gameover__card">
+    <h1 class="gameover__title" id="gameOverTitle">You Won!</h1>
+    <p class="gameover__subtitle" id="gameOverSubtitle">Final score</p>
+    <div class="gameover__score" id="gameOverScore">0 – 0</div>
+    <button id="playAgainBtn" class="start-btn start-btn--light">
+      <span class="start-btn__label">Play Again</span>
+    </button>
+  </div>
+</div>
+
+<script>
+/* =========================================================
+   CONFIGURATION CONSTANTS
+   ========================================================= */
+const MODEL_BASE_URL = "https://teachablemachine.withgoogle.com/models/Aff0TH1lO/";
+const MODEL_URL = MODEL_BASE_URL + "model.json";
+const METADATA_URL = MODEL_BASE_URL + "metadata.json";
+
+const CLASSES = ["Rock", "Paper", "Scissors"];
+const CLASS_ICONS = { Rock: "✊", Paper: "✋", Scissors: "✌️" };
+
+const STARTING_LIVES = 3;
+const COUNTDOWN_STAGES = ["3", "2", "1", "GO!"]; // 4 stages
+const COUNTDOWN_STAGE_MS = 750;                  // 4 * 750ms = exactly 3000ms
+const WEBCAM_SIZE = 400;                         // square capture size for tmImage.Webcam
+
+// Standard RPS beats-table: key beats value
+const BEATS = {
+  Rock: "Scissors",
+  Paper: "Rock",
+  Scissors: "Paper",
+};
+
+/* =========================================================
+   DOM REFERENCES
+   ========================================================= */
+const el = {
+  webcamContainer: document.getElementById("webcamContainer"),
+  camOverlay: document.getElementById("camOverlayMessage"),
+  confidenceBars: document.getElementById("confidenceBars"),
+
+  playerLives: document.getElementById("playerLives"),
+  botLives: document.getElementById("botLives"),
+  playerScore: document.getElementById("playerScore"),
+  botScore: document.getElementById("botScore"),
+
+  countdown: document.getElementById("countdown"),
+  countdownNumber: document.getElementById("countdownNumber"),
+
+  faceoff: document.getElementById("faceoff"),
+  playerIcon: document.getElementById("playerIcon"),
+  playerMoveName: document.getElementById("playerMoveName"),
+  botIcon: document.getElementById("botIcon"),
+  botMoveName: document.getElementById("botMoveName"),
+
+  resultBanner: document.getElementById("resultBanner"),
+  startBtn: document.getElementById("startBtn"),
+  botFace: document.getElementById("botFace"),
+  botFaceIcon: document.getElementById("botFaceIcon"),
+  botCaption: document.getElementById("botCaption"),
+
+  gameOverOverlay: document.getElementById("gameOverOverlay"),
+  gameOverTitle: document.getElementById("gameOverTitle"),
+  gameOverScore: document.getElementById("gameOverScore"),
+  playAgainBtn: document.getElementById("playAgainBtn"),
+};
+
+/* =========================================================
+   MUTABLE GAME STATE
+   Kept in one object so resetGame() can restore everything
+   from a single source of truth.
+   ========================================================= */
+const state = {
+  model: null,
+  webcam: null,
+
+  latestPredictions: { Rock: 0, Paper: 0, Scissors: 0 }, // continuously updated
+  modelReady: false,
+  webcamReady: false,
+
+  playerLives: STARTING_LIVES,
+  botLives: STARTING_LIVES,
+  playerScore: 0,
+  botScore: 0,
+
+  roundActive: false,   // true while a countdown/round is in progress (blocks double-starts)
+  roundToken: 0,        // incremented on every reset; stale async callbacks check against this
+  gameOver: false,
+};
+
+/* =========================================================
+   INITIALIZATION
+   ========================================================= */
+async function initApp() {
+  renderLives();
+  updateScoreUI();
+  el.startBtn.querySelector(".start-btn__label").textContent = "Loading model…";
+
+  try {
+    // Load the Teachable Machine model and request webcam access in parallel.
+    await Promise.all([loadModel(), initWebcam()]);
+
+    state.modelReady = true;
+    el.camOverlay.classList.add("hidden");
+    enableStartButtonIfReady();
+    predictLoop(); // begin continuous prediction updates
+  } catch (err) {
+    console.error("Initialization failed:", err);
+    showCamError(err);
+  }
+}
+
+async function loadModel() {
+  state.model = await tmImage.load(MODEL_URL, METADATA_URL);
+}
+
+async function initWebcam() {
+  try {
+    const flip = true; // mirror the feed, feels natural to the player
+    const webcam = new tmImage.Webcam(WEBCAM_SIZE, WEBCAM_SIZE, flip);
+    await webcam.setup(); // triggers the browser's permission prompt
+    await webcam.play();
+    state.webcam = webcam;
+    el.webcamContainer.innerHTML = "";
+    el.webcamContainer.appendChild(webcam.canvas);
+    state.webcamReady = true;
+
+    // Keep the webcam frame updating on every animation frame.
+    const updateFrame = () => {
+      if (state.webcam) {
+        state.webcam.update();
+      }
+      requestAnimationFrame(updateFrame);
+    };
+    updateFrame();
+  } catch (err) {
+    throw new Error("Webcam access was denied or unavailable: " + err.message);
+  }
+}
+
+function showCamError() {
+  el.camOverlay.textContent =
+    "⚠ Couldn't access your camera or load the model. Please allow camera access and reload the page.";
+  el.camOverlay.classList.remove("hidden");
+  el.startBtn.querySelector(".start-btn__label").textContent = "Camera unavailable";
+}
+
+function enableStartButtonIfReady() {
+  if (state.modelReady && state.webcamReady && !state.roundActive && !state.gameOver) {
+    el.startBtn.disabled = false;
+    el.startBtn.querySelector(".start-btn__label").textContent = "Start Round";
+  }
+}
+
+/* =========================================================
+   CONTINUOUS PREDICTION LOOP
+   Runs independently of rounds so confidence bars are always
+   live; the round logic simply reads state.latestPredictions
+   at the exact moment the countdown ends.
+   ========================================================= */
+async function predictLoop() {
+  if (!state.webcam || !state.model) return;
+
+  const predictions = await state.model.predict(state.webcam.canvas);
+
+  // Store as a simple { className: probability } map for easy lookup.
+  const map = {};
+  predictions.forEach((p) => { map[p.className] = p.probability; });
+  state.latestPredictions = map;
+
+  updateConfidenceUI(map);
+
+  requestAnimationFrame(predictLoop);
+}
+
+function updateConfidenceUI(map) {
+  const topClass = getTopClassName(map);
+
+  CLASSES.forEach((className) => {
+    const row = el.confidenceBars.querySelector('[data-class="' + className + '"]');
+    if (!row) return;
+    const prob = map[className] || 0;
+    const pct = Math.round(prob * 100);
+    row.querySelector(".confidence__fill").style.width = pct + "%";
+    row.querySelector(".confidence__pct").textContent = pct + "%";
+    row.classList.toggle("leading", className === topClass);
+  });
+}
+
+function getTopClassName(map) {
+  let best = null;
+  let bestProb = -Infinity;
+  CLASSES.forEach((className) => {
+    const prob = map[className] || 0;
+    if (prob > bestProb) {
+      bestProb = prob;
+      best = className;
+    }
+  });
+  return best;
+}
+
+/* =========================================================
+   ROUND FLOW
+   ========================================================= */
+function onStartRoundClick() {
+  // Guard against double-starts / clicks while a round is already running.
+  if (state.roundActive || state.gameOver || !state.modelReady || !state.webcamReady) return;
+
+  state.roundActive = true;
+  state.roundToken += 1;
+  const thisToken = state.roundToken;
+
+  el.startBtn.disabled = true;
+  el.startBtn.querySelector(".start-btn__label").textContent = "Round in progress…";
+  el.faceoff.hidden = true;
+  el.resultBanner.hidden = true;
+  el.botFace.classList.remove("thinking");
+  el.botFaceIcon.textContent = "🤖";
+  el.botCaption.textContent = "Watching your move…";
+
+  runCountdown(thisToken).then((wasCancelled) => {
+    if (wasCancelled) return; // a reset happened mid-countdown; abandon this round
+    resolveRound(thisToken);
+  });
+}
+
+/**
+ * Runs the 3-2-1-GO! countdown over exactly COUNTDOWN_STAGES.length * COUNTDOWN_STAGE_MS ms.
+ * Resolves with `true` if the round was cancelled (e.g. game reset) mid-countdown,
+ * or `false` if it completed normally.
+ */
+function runCountdown(token) {
+  return new Promise((resolve) => {
+    el.countdown.hidden = false;
+    let stageIndex = 0;
+
+    const showStage = () => {
+      // If the game was reset while we were waiting, abort quietly.
+      if (token !== state.roundToken) {
+        resolve(true);
+        return;
+      }
+
+      if (stageIndex >= COUNTDOWN_STAGES.length) {
+        el.countdown.hidden = true;
+        resolve(false); // countdown fully finished — safe to lock in moves now
+        return;
+      }
+
+      const label = COUNTDOWN_STAGES[stageIndex];
+      el.countdownNumber.textContent = label;
+      el.countdownNumber.classList.toggle("go", label === "GO!");
+      // Restart the pop animation on every stage.
+      el.countdownNumber.style.animation = "none";
+      void el.countdownNumber.offsetHeight; // force reflow to replay animation
+      el.countdownNumber.style.animation = "";
+
+      stageIndex += 1;
+      setTimeout(showStage, COUNTDOWN_STAGE_MS);
+    };
+
+    showStage();
+  });
+}
+
+/**
+ * Called at the exact instant the countdown reaches zero.
+ * Reads the player's current top prediction, rolls the bot's move,
+ * and resolves the round exactly once.
+ */
+function resolveRound(token) {
+  if (token !== state.roundToken) return; // stale round, ignore
+
+  // 1. Lock in the player's move from the live prediction snapshot.
+  const playerMove = getTopClassName(state.latestPredictions);
+
+  // 2. Roll the bot's move randomly (only once per round).
+  const botMove = CLASSES[Math.floor(Math.random() * CLASSES.length)];
+
+  // 3. Reveal both choices.
+  el.playerIcon.textContent = CLASS_ICONS[playerMove];
+  el.playerMoveName.textContent = playerMove;
+  el.botIcon.textContent = CLASS_ICONS[botMove];
+  el.botMoveName.textContent = botMove;
+  el.faceoff.hidden = false;
+  el.botFaceIcon.textContent = CLASS_ICONS[botMove];
+
+  // 4. Determine the winner using the standard beats-table.
+  const outcome = determineWinner(playerMove, botMove);
+
+  // 5. Apply exactly one life change / score update.
+  if (outcome === "player") {
+    state.botLives -= 1;
+    state.playerScore += 1;
+    showResultBanner("You Win!", "win");
+    el.botCaption.textContent = "The bot took a hit.";
+  } else if (outcome === "bot") {
+    state.playerLives -= 1;
+    state.botScore += 1;
+    showResultBanner("You Lose!", "lose");
+    el.botCaption.textContent = "The bot got the upper hand.";
+  } else {
+    showResultBanner("Tie!", "tie");
+    el.botCaption.textContent = "Nobody flinched.";
+  }
+
+  renderLives();
+  updateScoreUI();
+
+  // 6. Check for game over; otherwise unlock the Start Round button.
+  if (state.playerLives <= 0 || state.botLives <= 0) {
+    endGame();
+  } else {
+    state.roundActive = false;
+    enableStartButtonIfReady();
+  }
+}
+
+function determineWinner(playerMove, botMove) {
+  if (playerMove === botMove) return "tie";
+  if (BEATS[playerMove] === botMove) return "player";
+  return "bot";
+}
+
+function showResultBanner(text, cssClass) {
+  el.resultBanner.textContent = text;
+  el.resultBanner.className = "result-banner " + cssClass;
+  el.resultBanner.hidden = false;
+}
+
+/* =========================================================
+   LIVES / SCORE RENDERING
+   ========================================================= */
+function renderLives() {
+  renderLivesInto(el.playerLives, state.playerLives, "var(--player)");
+  renderLivesInto(el.botLives, state.botLives, "var(--bot)");
+}
+
+function renderLivesInto(container, livesCount, activeColor) {
+  container.innerHTML = "";
+  for (let i = 0; i < STARTING_LIVES; i++) {
+    const lost = i >= livesCount;
+    const heart = document.createElement("div");
+    heart.className = "lives__heart" + (lost ? " lost" : "");
+    heart.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 21s-7.5-4.6-10-9.1C.4 8.6 2 5 5.4 5c2 0 3.3 1 4.6 2.6C11.3 6 12.6 5 14.6 5 18 5 19.6 8.6 22 11.9 19.5 16.4 12 21 12 21z"/></svg>';
+    heart.style.color = lost ? "#3a3a52" : activeColor;
+    container.appendChild(heart);
+  }
+}
+
+function updateScoreUI() {
+  el.playerScore.textContent = state.playerScore;
+  el.botScore.textContent = state.botScore;
+}
+
+/* =========================================================
+   GAME OVER / RESET
+   ========================================================= */
+function endGame() {
+  state.gameOver = true;
+  state.roundActive = false;
+
+  const playerLost = state.playerLives <= 0;
+  el.gameOverTitle.textContent = playerLost ? "You Lost!" : "You Won!";
+  el.gameOverScore.textContent = state.playerScore + " – " + state.botScore;
+  el.gameOverOverlay.hidden = false;
+}
+
+function resetGame() {
+  // Bump the round token so any in-flight countdown/timeouts are ignored.
+  state.roundToken += 1;
+
+  state.playerLives = STARTING_LIVES;
+  state.botLives = STARTING_LIVES;
+  state.playerScore = 0;
+  state.botScore = 0;
+  state.roundActive = false;
+  state.gameOver = false;
+
+  renderLives();
+  updateScoreUI();
+
+  el.faceoff.hidden = true;
+  el.resultBanner.hidden = true;
+  el.countdown.hidden = true;
+  el.botFaceIcon.textContent = "🤖";
+  el.botCaption.textContent = "Waiting for round to start…";
+  el.gameOverOverlay.hidden = true;
+
+  enableStartButtonIfReady();
+}
+
+/* =========================================================
+   EVENT WIRING
+   ========================================================= */
+el.startBtn.addEventListener("click", onStartRoundClick);
+el.playAgainBtn.addEventListener("click", resetGame);
+
+/* =========================================================
+   BOOT
+   ========================================================= */
+initApp();
+</script>
+</body>
+</html>
